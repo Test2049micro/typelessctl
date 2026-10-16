@@ -25,7 +25,7 @@ Typeless 手动启动时必定弹出 hub 主界面窗口。本工具的守卫（
 运行本命令的终端需授予「辅助功能」权限（系统设置 → 隐私与安全性 → 辅助功能）。
 
 ```bash
-git clone https://github.com/<you>/typelessctl.git
+git clone https://github.com/Test2049micro/typelessctl.git
 cd typelessctl
 bin/typelessctl doctor          # 体检：确认各项能力可用
 bin/typelessctl guard install   # 注册 launchd 守卫（每 2 秒巡查一次）

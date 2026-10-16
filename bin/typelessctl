@@ -15,8 +15,8 @@ LOG_FILE="$STATE_DIR/guard.log"
 LABEL="dev.zcode.typelessctl-guard"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 APP_SUPPORT="$HOME/Library/Application Support/Typeless"
-SETTINGS="$APP_SUPPORT/app-settings.json"
-DB="$APP_SUPPORT/typeless.db"
+SETTINGS="${TYPELESSCTL_SETTINGS:-$APP_SUPPORT/app-settings.json}"
+DB="${TYPELESSCTL_DB:-$APP_SUPPORT/typeless.db}"
 GRACE_SECONDS="${TYPELESSCTL_GRACE:-15}"
 JSON=0
 
@@ -141,11 +141,14 @@ EOF
 ALLOWED_KEYS="enableShowAppInDock showFlowBarOnDesktop launchAtSystemStartup historyDurationSeconds preferredLanguage autoSelectLanguages enableInteractionSoundEffects"
 cmd_settings() {
   case "${1:-list}" in
-    list) python3 -c 'import json,sys;[print(k,"=",json.load(open(sys.argv[1])).get(k)) for k in sys.argv[2].split()]' "$SETTINGS" "$ALLOWED_KEYS";;
+    list) [ -f "$SETTINGS" ] || die "设置文件不存在（App 未安装或未首次启动）：$SETTINGS" 5
+          python3 -c 'import json,sys;[print(k,"=",json.load(open(sys.argv[1])).get(k)) for k in sys.argv[2].split()]' "$SETTINGS" "$ALLOWED_KEYS";;
     get)  [ $# -ge 2 ] || die "用法: typelessctl settings get <key>"
+          [ -f "$SETTINGS" ] || die "设置文件不存在（App 未安装或未首次启动）：$SETTINGS" 5
           python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],"(unset)"))' "$SETTINGS" "$2";;
     set)  [ $# -ge 3 ] || die "用法: typelessctl settings set <key> <json-value>"
           case " $ALLOWED_KEYS " in *" $2 "*) ;; *) die "键 $2 不在白名单（防写坏 schema）：$ALLOWED_KEYS" 2;; esac
+          [ -f "$SETTINGS" ] || die "设置文件不存在（App 未安装或未首次启动）：$SETTINGS" 5
           cp "$SETTINGS" "$STATE_DIR/app-settings.$(date +%Y%m%d%H%M%S).bak" 2>/dev/null || mkdir -p "$STATE_DIR" && cp "$SETTINGS" "$STATE_DIR/app-settings.$(date +%Y%m%d%H%M%S).bak"
           python3 -c 'import json,sys;f=sys.argv[1];d=json.load(open(f));d[sys.argv[2]]=json.loads(sys.argv[3]);json.dump(d,open(f,"w"),indent=2,ensure_ascii=False)' "$SETTINGS" "$2" "$3" || die "写入失败（键值需为合法 JSON：true/false/数字/字符串）" 5
           now="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))' "$SETTINGS" "$2")"
