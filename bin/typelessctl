@@ -157,6 +157,16 @@ EOF
       echo "  paused: $([ -f "$STATE_DIR/PAUSED" ] && echo yes || echo no)   grace: ${GRACE_SECONDS}s   log: $LOG_FILE";;
     tick)
       [ -f "$STATE_DIR/PAUSED" ] && exit 0
+      # 防重入：系统高负载时 tick 可能跑得比 2s 间隔还慢，无锁会无限堆积进程。
+      # mkdir 原子锁；锁龄超 60s 视为残留（进程被杀）自动清除。
+      LOCK="$STATE_DIR/tick.lock"
+      if ! mkdir "$LOCK" 2>/dev/null; then
+        NOW=$(date +%s); BORN=$(cat "$LOCK/born" 2>/dev/null || echo "$NOW")
+        if [ $((NOW - BORN)) -gt 60 ]; then rm -rf "$LOCK"; exit 0; fi
+        exit 0
+      fi
+      date +%s > "$LOCK/born"
+      trap 'rmdir "$LOCK" 2>/dev/null' EXIT
       pid="$(app_pid)"; [ -z "$pid" ] && exit 0
       secs="$(app_secs "$pid")"
       [ "$secs" -gt "$GRACE_SECONDS" ] && exit 0   # 意图感知：稳定运行后的窗口是你主动开的，放行
