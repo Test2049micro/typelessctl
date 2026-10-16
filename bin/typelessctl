@@ -5,7 +5,6 @@
 # 红线：绝不读取 app-storage.json（含账号会话）；导出的历史文件默认仅用户可读。
 set -uo pipefail
 
-BUNDLE_ID="now.typeless.desktop"
 APP_PATH="${TYPELESSCTL_APP_PATH:-/Applications/Typeless.app}"
 APP_NAME="Typeless"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,25 +52,29 @@ cmd_status() {
 }
 
 cmd_doctor() {
-  local ok=0 warn=0
   check() { # check <能力> <available|unsupported|permission_required|missing> <说明>
     printf '  %-18s %-19s %s\n' "$1" "$2" "$3"
-    [ "$2" = "available" ] || { ok=0; warn=1; }
   }
   echo "typelessctl doctor"
   local ver; ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null)"
-  [ -d "$APP_PATH" ] && check "app-installed" available "$APP_PATH (v${ver:-?})" || check "app-installed" missing "$APP_PATH 不存在"
+  if [ -d "$APP_PATH" ]; then check "app-installed" available "$APP_PATH (v${ver:-?})"
+  else check "app-installed" missing "$APP_PATH 不存在"; fi
   if [ ! -f "$APPLESCRIPT" ]; then check "cli-assets" missing "close-hub.applescript 不在 $APPLESCRIPT"; fi
-  osascript -e 'tell application "System Events" to get name of first process' >/dev/null 2>&1 \
-    && check "accessibility(AX)" available "System Events 可控窗（终端需辅助功能授权）" \
-    || check "accessibility(AX)" permission_required "请：系统设置→隐私与安全性→辅助功能，勾选你运行本命令的终端"
-  [ -f "$SETTINGS" ] && check "settings-json" available "$SETTINGS" || check "settings-json" missing "App 尚未生成设置文件"
+  if osascript -e 'tell application "System Events" to get name of first process' >/dev/null 2>&1; then
+    check "accessibility(AX)" available "System Events 可控窗（终端需辅助功能授权）"
+  else
+    check "accessibility(AX)" permission_required "请：系统设置→隐私与安全性→辅助功能，勾选你运行本命令的终端"
+  fi
+  if [ -f "$SETTINGS" ]; then check "settings-json" available "$SETTINGS"
+  else check "settings-json" missing "App 尚未生成设置文件"; fi
   if [ -f "$DB" ] && sqlite3 -readonly "$DB" "SELECT count(*) FROM history_v2;" >/dev/null 2>&1; then
     check "history-db" available "$(sqlite3 -readonly "$DB" 'SELECT count(*) FROM history_v2' 2>/dev/null) 条记录（明文可读）"
   else check "history-db" missing "typeless.db 不可读或表缺失"; fi
-  launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 \
-    && check "guard" available "launchd 已注册，每 2s 巡查" \
-    || check "guard" missing "运行: typelessctl guard install"
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    check "guard" available "launchd 已注册，每 2s 巡查"
+  else
+    check "guard" missing "运行: typelessctl guard install"
+  fi
   [ "$JSON" = 1 ] && echo "（--json doctor 输出开发中，当前为表格）"
   echo "注：CDP 调试端口/改包两条通道已被证实不可用，本工具不依赖。"
 }
@@ -117,7 +120,11 @@ cmd_guard() {
 </plist>
 EOF
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
-      launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "guard 已安装：App 启动后 ${GRACE_SECONDS}s 内自动弹出的主界面会被关闭"
+      if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
+        echo "guard 已安装：App 启动后 ${GRACE_SECONDS}s 内自动弹出的主界面会被关闭"
+      else
+        echo "bootstrap 失败（可能已加载或 plist 非法）" >&2; exit 6
+      fi
       ;;
     uninstall) launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"; echo "guard 已卸载";;
     enable)  rm -f "$STATE_DIR/PAUSED"; echo "guard 已启用（resume）";;
