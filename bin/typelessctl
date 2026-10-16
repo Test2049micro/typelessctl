@@ -7,7 +7,18 @@ set -uo pipefail
 
 APP_PATH="${TYPELESSCTL_APP_PATH:-/Applications/Typeless.app}"
 APP_NAME="Typeless"
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# 解析符号链接：install.sh 把本脚本链到 ~/.local/bin；dirname($0) 在经符号链接调用时会解析到
+# 链接所在目录 → lib/close-hub.applescript 找不到、守卫 tick 静默空转（2026-10-17 发现）。
+# bash 3.2 兼容：readlink 无 -f，单跳循环解析；tick 热路径不新增子进程。
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _t="$(readlink "$_src")"
+  case "$_t" in
+    /*) _src="$_t" ;;
+    *)  _src="$(cd "$(dirname "$_src")" && pwd)/$_t" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$_src")/.." && pwd)"
 APPLESCRIPT="$SCRIPT_DIR/lib/close-hub.applescript"
 STATE_DIR="${TYPELESSCTL_STATE:-$HOME/.typelessctl}"
 LOG_FILE="$STATE_DIR/guard.log"
@@ -313,7 +324,7 @@ case "${1:-}" in
   status|doctor|bootcheck|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
   pause) cmd_guard disable;;
   resume) cmd_guard enable;;
-  version|--version) echo "typelessctl 0.1.3";;
+  version|--version) echo "typelessctl 0.1.4";;
   ""|help|--help|-h) usage;;
   *) usage; exit 2;;
 esac

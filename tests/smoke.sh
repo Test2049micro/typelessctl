@@ -58,7 +58,12 @@ TD5="$(mktemp -d)"; mkdir -p "$TD5/tick.lock"
 date +%s > "$TD5/tick.lock/born"; echo 99999 > "$TD5/tick.lock/owner"
 TYPELESSCTL_STATE="$TD5" "$TC" guard tick >/dev/null 2>&1
 if [ -d "$TD5/tick.lock" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 继任者锁被旧 tick 的 trap 误删"; fi
-rm -rf "$TD" "$TD2" "$TD3" "$TD4" "$TD5" 2>/dev/null
+# 7. 经符号链接调用时资源路径仍解析到仓库真实位置（install.sh 用 ln -sf，dirname($0) 坑会让守卫静默空转）
+TD6="$(mktemp -d)"; mkdir -p "$TD6/bin"; ln -sf "$TC" "$TD6/bin/typelessctl"
+if "$TD6/bin/typelessctl" doctor 2>/dev/null | grep -q "cli-assets.*missing"; then
+  fail=$((fail+1)); echo "FAIL: 经符号链接调用找不到 lib/（守卫会静默空转）"
+else pass=$((pass+1)); fi
+rm -rf "$TD" "$TD2" "$TD3" "$TD4" "$TD5" "$TD6" 2>/dev/null
 
 # help 必须包含核心子命令（防止重命名悄悄破坏接口）
 HELP_OUT="$("$TC" help)"
