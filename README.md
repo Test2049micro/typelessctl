@@ -33,6 +33,9 @@ bin/typelessctl doctor          # 体检：确认各项能力可用
 bin/typelessctl guard install   # 注册 launchd 守卫（每 2 秒巡查一次）
 ```
 
+⚠️ **全新安装 Typeless 的用户请先完成 App 首次引导（onboarding）再装守卫**：守卫会关掉启动宽限期内
+弹出的所有向导窗，先装会导致你看不见引导、Fn 也不工作。已用过 Typeless 的用户无此问题。
+
 卸载：`bin/typelessctl guard uninstall`
 
 ## 命令一览

@@ -53,7 +53,12 @@ else pass=$((pass+1)); fi
 TD4="$(mktemp -d)"; mkdir -p "$TD4/tick.lock"
 TYPELESSCTL_STATE="$TD4" "$TC" guard tick >/dev/null 2>&1
 if [ -d "$TD4/tick.lock" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 新鲜锁被误清（会导致并发关窗）"; fi
-rm -rf "$TD" "$TD2" "$TD3" "$TD4" 2>/dev/null
+# 6. 继任者锁保护：owner≠本 PID 的新鲜锁，trap 不得删（否则卡死的旧 tick 退出会放倒正在干活的锁）
+TD5="$(mktemp -d)"; mkdir -p "$TD5/tick.lock"
+date +%s > "$TD5/tick.lock/born"; echo 99999 > "$TD5/tick.lock/owner"
+TYPELESSCTL_STATE="$TD5" "$TC" guard tick >/dev/null 2>&1
+if [ -d "$TD5/tick.lock" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 继任者锁被旧 tick 的 trap 误删"; fi
+rm -rf "$TD" "$TD2" "$TD3" "$TD4" "$TD5" 2>/dev/null
 
 # help 必须包含核心子命令（防止重命名悄悄破坏接口）
 HELP_OUT="$("$TC" help)"

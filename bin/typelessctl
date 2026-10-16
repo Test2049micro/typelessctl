@@ -212,7 +212,11 @@ EOF
         exit 0
       fi
       date +%s > "$LOCK/born" 2>/dev/null || true
-      trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
+      echo "$$" > "$LOCK/owner" 2>/dev/null || true
+      # 只删自己的锁：若本 tick 卡住超 60s、别的 tick 已按过期清锁并重建（owner 变成他 PID），
+      # 本 trap 不得删掉继任者的锁（否则两个 tick 并发点同一按钮 —— 2026-17 二审遗留，今日 load 273
+      # 时 osascript 卡 58s 使其可达，故补）。
+      trap 'if [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$$" ]; then rm -rf "$LOCK" 2>/dev/null; fi' EXIT
       pid="$(app_pid)"; [ -z "$pid" ] && exit 0
       secs="$(app_secs "$pid")"
       case "$secs" in ''|*[!0-9]*) exit 0;; esac   # 时长不可解析时不动作（宁可不关，不可误关）
@@ -307,7 +311,7 @@ case "${1:-}" in
   status|doctor|bootcheck|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
   pause) cmd_guard disable;;
   resume) cmd_guard enable;;
-  version|--version) echo "typelessctl 0.1.1";;
+  version|--version) echo "typelessctl 0.1.2";;
   ""|help|--help|-h) usage;;
   *) usage; exit 2;;
 esac
