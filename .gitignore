@@ -1,0 +1,17 @@
+# 本地状态与日志（绝不入库）
+*.log
+.DS_Store
+
+# 用户数据与导出（隐私红线）
+*.db
+*.db-wal
+*.db-shm
+*export*.csv
+*export*.json
+app-settings*.json
+app-settings*.bak
+app-storage*.json
+
+# 编辑器
+.idea/
+.vscode/
