@@ -297,7 +297,7 @@ typelessctl — Typeless for macOS 命令行控制器（非官方）
   history list [N]           最近 N 条听写历史（SQLite 直读）
   history export [csv]       全量导出 CSV（默认 ~/.typelessctl/，chmod 600）
   pause / resume             = guard disable / enable 的别名
-全局：--json（仅 status 支持；须置于子命令前，如 `typelessctl --json status`）  环境变量：TYPELESSCTL_GRACE 宽限秒(默认15)
+全局：--json（仅 status 支持；须置于子命令前，如 "typelessctl --json status"）  环境变量：TYPELESSCTL_GRACE 宽限秒(默认15)
 退出码：0 成功 2 用法 3 权限 4 不支持 5 数据 6 结果未核验
 EOF
 }
