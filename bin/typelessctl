@@ -307,7 +307,7 @@ case "${1:-}" in
   status|doctor|bootcheck|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
   pause) cmd_guard disable;;
   resume) cmd_guard enable;;
-  version|--version) echo "typelessctl 0.1.0";;
+  version|--version) echo "typelessctl 0.1.1";;
   ""|help|--help|-h) usage;;
   *) usage; exit 2;;
 esac
