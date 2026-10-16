@@ -27,6 +27,24 @@ t 4 "hub show 不支持 4"    "$TC" hub show
 t 5 "history 无库 5"       "$TC" history list
 t 5 "settings 无文件 5"    "$TC" settings list
 t 1 "bootcheck 无环境 1"   "$TC" bootcheck
+t 2 "history N 非数字 2"   "$TC" history list "1; SELECT 1"
+t 2 "settings set 非法JSON 2" "$TC" settings set enableShowAppInDock notjson
+
+# --- 回归：2026-10-17 review 抓出的盲区（此前 CI 全绿却漏掉这些真实故障）---
+# 1. 锁必须被释放（曾因 rmdir 删非空目录 → 锁永久残留 → 守卫退化为 62s 才巡查一次）
+TD="$(mktemp -d)"
+TYPELESSCTL_STATE="$TD" "$TC" guard tick >/dev/null 2>&1
+if [ -d "$TD/tick.lock" ]; then fail=$((fail+1)); echo "FAIL: tick 锁未释放（守卫会退化）"
+else pass=$((pass+1)); fi
+# 2. 首次安装：STATE_DIR 不存在时也必须能工作（曾 mkdir 永久失败 → 守卫从不巡查）
+TD2="$(mktemp -d)/deep/nonexist"
+TYPELESSCTL_STATE="$TD2" "$TC" guard tick >/dev/null 2>&1
+if [ -d "$TD2/tick.lock" ]; then fail=$((fail+1)); echo "FAIL: STATE_DIR 缺失时锁残留"
+else pass=$((pass+1)); fi
+# 3. --json status 必须是合法 JSON（曾手工拼接，窗口名含反斜杠/引号即破）
+if "$TC" --json status 2>/dev/null | python3 -c 'import json,sys;json.load(sys.stdin)' 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: --json status 输出非合法 JSON"; fi
+rm -rf "$TD" "$TD2" 2>/dev/null
 
 # help 必须包含核心子命令（防止重命名悄悄破坏接口）
 HELP_OUT="$("$TC" help)"

@@ -40,8 +40,10 @@ cmd_status() {
   [ -z "$guard" ] && guard="not installed"
   dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
   if [ "$JSON" = 1 ]; then
-    printf '{"running":%s,"pid":"%s","uptime_seconds":"%s","windows":"%s","guard":"%s","show_in_dock":%s}\n' \
-      "$([ -n "$(app_pid)" ] && echo true || echo false)" "${pid}" "${et}" "${wins//\"/}" "${guard//\"/}" "${dock:-false}"
+    # 用 python3 生成 JSON（正确转义反斜杠/引号/控制字符），避免手工拼接出非法 JSON
+    RUNNING=$([ -n "$(app_pid)" ] && echo true || echo false) \
+    PID="${pid}" ETIME="${et}" WINS="${wins}" GUARD="${guard}" DOCK="${dock:-}" \
+    python3 -c 'import json,os;print(json.dumps({"running":os.environ["RUNNING"]=="true","pid":os.environ["PID"],"uptime_seconds":os.environ["ETIME"],"windows":os.environ["WINS"],"guard":os.environ["GUARD"],"show_in_dock":os.environ["DOCK"]=="true"}))'
   else
     echo "app:        ${pid} $([ -n "$(app_pid)" ] && echo "(running ${et}s)")"
     echo "windows:    ${wins:-（无/未运行）}"
@@ -91,10 +93,22 @@ cmd_app() {
 cmd_hub() {
   case "${1:-status}" in
     close)
-      local closed; closed="$(osascript "$APPLESCRIPT" 2>/dev/null)"
-      if [ -n "$closed" ]; then echo "已关闭: $closed";
-      elif [ -z "$(windows)" ]; then echo "App 未运行"; exit 6;
-      else echo "没有可关的 hub/引导窗口（Status 听写条不动）"; fi;;
+      local pid; pid="$(app_pid)"
+      [ -z "$pid" ] && die "App 未运行" 4      # 用 PID 判活，不用「窗口为空」（后者也包含无窗口/权限失败）
+      local before after
+      before="$(windows)"
+      [ -z "$before" ] && die "读不到窗口（可能 AX 权限缺失）" 3
+      if ! printf '%s' "$before" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+        echo "无需关闭：当前没有主界面/引导窗口（剩余: ${before:-无}）"; exit 0
+      fi
+      osascript "$APPLESCRIPT" >/dev/null 2>&1   # 点击动作；不以它的返回值当结论，下面读回核验
+      sleep 1
+      after="$(windows)"
+      if printf '%s' "$after" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+        echo "窗仍存在（关闭未生效）：$after" >&2; exit 6
+      else
+        echo "已关闭（剩余窗口: ${after:-无}）"
+      fi;;
     status) windows;;
     show) die "hub show 未验证：手动唤回主界面的原生入口是 App 托盘菜单（GUI），CLI 不模拟焦点操作。临时放行：typelessctl pause" 4;;
     *) die "用法: typelessctl hub {close|status|show}";;
@@ -108,16 +122,25 @@ cmd_bootcheck() {
   chk() { if [ "$2" = 0 ]; then echo "  PASS  $1"; else echo "  FAIL  $1"; fails=$((fails+1)); fi; }
   echo "typelessctl bootcheck"
   local pid wins dock
+  # AX 权限前置检查：读不到窗口时后续「只剩浮动条」不能算 PASS，否则权限失效会伪装成静默成功
+  local ax_ok=1
+  osascript -e 'tell application "System Events" to get name of every process' >/dev/null 2>&1 && ax_ok=0
+  [ "$ax_ok" = 0 ]; chk "辅助功能(AX)权限可用" $?
   pid="$(app_pid)"
   [ -n "$pid" ]; chk "App 进程在跑（登录项自启生效）" $?
-  wins="$(windows)"
-  if printf '%s' "$wins" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
-    chk "窗口只剩听写浮动条（开机静默形态）" 1
+  if [ "$ax_ok" != 0 ]; then
+    echo "  FAIL  窗口只剩听写浮动条（无法读取窗口：AX 权限缺失）"; fails=$((fails+1))
   else
-    chk "窗口只剩听写浮动条（开机静默形态）" 0
+    wins="$(windows)"
+    if printf '%s' "$wins" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+      chk "窗口只剩听写浮动条（开机静默形态）" 1
+    else
+      chk "窗口只剩听写浮动条（开机静默形态）" 0
+    fi
   fi
   dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
-  [ "$dock" = "false" ]; chk "不占 Dock（enableShowAppInDock=false）" $?
+  if [ -n "$dock" ]; then [ "$dock" = "false" ]; chk "不占 Dock（enableShowAppInDock=false）" $?
+  else echo "  FAIL  不占 Dock（无法读取 $SETTINGS）"; fails=$((fails+1)); fi
   launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; chk "静默守卫已加载（launchd）" $?
   osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null | grep -q "Typeless"; chk "登录项 Typeless 存在" $?
   if [ "$fails" = 0 ]; then echo "bootcheck: 全部通过"; exit 0
@@ -127,7 +150,10 @@ cmd_bootcheck() {
 cmd_guard() {
   case "${1:-status}" in
     install)
-      cat > "$PLIST" <<EOF
+      mkdir -p "$(dirname "$PLIST")" || die "无法创建 LaunchAgents 目录" 5
+      # 已有 plist 先备份：避免新配置写坏后旧守卫已被卸载、无从回滚
+      [ -f "$PLIST" ] && cp "$PLIST" "$PLIST.bak" 2>/dev/null
+      cat > "$PLIST" <<EOF || die "无法写入 plist：$PLIST" 5
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -146,29 +172,35 @@ EOF
       if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
         echo "guard 已安装：App 启动后 ${GRACE_SECONDS}s 内自动弹出的主界面会被关闭"
       else
-        echo "bootstrap 失败（可能已加载或 plist 非法）" >&2; exit 6
+        echo "bootstrap 失败（旧守卫已卸载；若原已安装，备份在 $PLIST.bak）" >&2; exit 6
       fi
       ;;
-    uninstall) launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; rm -f "$PLIST"; echo "guard 已卸载";;
-    enable)  rm -f "$STATE_DIR/PAUSED"; echo "guard 已启用（resume）";;
-    disable) mkdir -p "$STATE_DIR"; touch "$STATE_DIR/PAUSED"; echo "guard 已暂停（App 原生窗口行为恢复）";;
+    uninstall)
+      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      if rm -f "$PLIST"; then echo "guard 已卸载"; else die "plist 删除失败：$PLIST" 5; fi;;
+    enable)  rm -f "$STATE_DIR/PAUSED" 2>/dev/null; if [ -f "$STATE_DIR/PAUSED" ]; then die "无法删除 PAUSED，守卫仍暂停" 5; else echo "guard 已启用（resume）"; fi;;
+    disable) mkdir -p "$STATE_DIR" && touch "$STATE_DIR/PAUSED" || die "无法创建 PAUSED，守卫未暂停" 5; echo "guard 已暂停（App 原生窗口行为恢复）";;
     status)
       launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '/state =|pid =|last exit/{print "  "$0}' | head -3
       echo "  paused: $([ -f "$STATE_DIR/PAUSED" ] && echo yes || echo no)   grace: ${GRACE_SECONDS}s   log: $LOG_FILE";;
     tick)
       [ -f "$STATE_DIR/PAUSED" ] && exit 0
       # 防重入：系统高负载时 tick 可能跑得比 2s 间隔还慢，无锁会无限堆积进程。
-      # mkdir 原子锁；锁龄超 60s 视为残留（进程被杀）自动清除。
+      # 锁目录内含 born 文件，故释放必须用 rm -rf（rmdir 删不掉非空目录 —— 2026-10-17 修复）。
+      # 锁龄超 60s 视为残留（进程被杀）自动清除。
+      mkdir -p "$STATE_DIR"   # 首次安装时 STATE_DIR 可能不存在，否则 mkdir 锁会永久失败
       LOCK="$STATE_DIR/tick.lock"
       if ! mkdir "$LOCK" 2>/dev/null; then
         NOW=$(date +%s); BORN=$(cat "$LOCK/born" 2>/dev/null || echo "$NOW")
+        case "$BORN" in ''|*[!0-9]*) BORN="$NOW";; esac   # 非十进制整数不做算术（防内容被注入算术求值）
         if [ $((NOW - BORN)) -gt 60 ]; then rm -rf "$LOCK"; exit 0; fi
         exit 0
       fi
       date +%s > "$LOCK/born"
-      trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+      trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
       pid="$(app_pid)"; [ -z "$pid" ] && exit 0
       secs="$(app_secs "$pid")"
+      case "$secs" in ''|*[!0-9]*) exit 0;; esac   # 时长不可解析时不动作（宁可不关，不可误关）
       [ "$secs" -gt "$GRACE_SECONDS" ] && exit 0   # 意图感知：稳定运行后的窗口是你主动开的，放行
       closed="$(osascript "$APPLESCRIPT" 2>/dev/null)"
       [ -n "$closed" ] && { mkdir -p "$STATE_DIR"; printf '[%s] closed auto-hub (t+%ss): %s\n' "$(date '+%F %T')" "$secs" "$closed" >> "$LOG_FILE"; }
@@ -188,30 +220,49 @@ cmd_settings() {
           python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],"(unset)"))' "$SETTINGS" "$2";;
     set)  [ $# -ge 3 ] || die "用法: typelessctl settings set <key> <json-value>"
           case " $ALLOWED_KEYS " in *" $2 "*) ;; *) die "键 $2 不在白名单（防写坏 schema）：$ALLOWED_KEYS" 2;; esac
+          # 值是否为合法 JSON 先校验（参数错误优先于数据缺失）
+          python3 -c 'import json,sys;json.loads(sys.argv[1])' "$3" 2>/dev/null || die "值不是合法 JSON（true/false/数字/\"字符串\"）：$3" 2
           [ -f "$SETTINGS" ] || die "设置文件不存在（App 未安装或未首次启动）：$SETTINGS" 5
-          cp "$SETTINGS" "$STATE_DIR/app-settings.$(date +%Y%m%d%H%M%S).bak" 2>/dev/null || mkdir -p "$STATE_DIR" && cp "$SETTINGS" "$STATE_DIR/app-settings.$(date +%Y%m%d%H%M%S).bak"
-          python3 -c 'import json,sys;f=sys.argv[1];d=json.load(open(f));d[sys.argv[2]]=json.loads(sys.argv[3]);json.dump(d,open(f,"w"),indent=2,ensure_ascii=False)' "$SETTINGS" "$2" "$3" || die "写入失败（键值需为合法 JSON：true/false/数字/字符串）" 5
+          mkdir -p "$STATE_DIR"
+          _bak="$STATE_DIR/app-settings.$(date +%Y%m%d%H%M%S).$$.bak"
+          cp "$SETTINGS" "$_bak" || die "备份失败，未改动原文件：$SETTINGS" 5
+          # 原子替换：写临时文件再 mv，避免 Python 直接 "w" 截断原文件后写入失败导致损坏
+          _tmp="$SETTINGS.tmp.$$"
+          python3 -c 'import json,sys;f=sys.argv[1];d=json.load(open(f));d[sys.argv[2]]=json.loads(sys.argv[3]);json.dump(d,open(sys.argv[4],"w"),indent=2,ensure_ascii=False)' "$SETTINGS" "$2" "$3" "$_tmp" || { rm -f "$_tmp"; die "写入失败（原文件未改，备份在 $_bak）" 5; }
+          mv "$_tmp" "$SETTINGS" || { rm -f "$_tmp"; die "替换失败（原文件未改，备份在 $_bak）" 5; }
           now="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))' "$SETTINGS" "$2")"
           want="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1]))' "$3")"
-          if [ "$now" = "$want" ]; then echo "已设置 $2=$now";
+          if [ "$now" = "$want" ]; then echo "已设置 $2=$now（备份 $_bak）";
           else echo "写入后读回不符：$now ≠ $want（App 可能正持有旧内存态；建议退出 App 后重试）" >&2; exit 6; fi;;
     *) die "用法: typelessctl settings {list|get|set}";;
   esac
 }
 
 cmd_history() {
-  [ -f "$DB" ] || die "typeless.db 不存在" 5
   case "${1:-list}" in
     list)
       local n="${2:-20}"
-      sqlite3 -readonly "$DB" "SELECT datetime(created_at), printf('%6.1fs', duration), mode, status, substr(coalesce(refined_text,''),1,48) FROM history_v2 ORDER BY created_at DESC LIMIT $n;"
-      echo "  ——共 $(sqlite3 -readonly "$DB" 'SELECT count(*) FROM history_v2') 条";;
+      case "$n" in ''|*[!0-9]*) die "N 必须是正整数：$n" 2;; esac   # 参数先校验（防 LIMIT 注入）
+      [ -f "$DB" ] || die "typeless.db 不存在" 5
+      local out rc
+      out="$(sqlite3 -readonly "$DB" "SELECT datetime(created_at), printf('%6.1fs', duration), mode, status, substr(coalesce(refined_text,''),1,48) FROM history_v2 ORDER BY created_at DESC LIMIT $n;" 2>&1)"; rc=$?
+      [ $rc -ne 0 ] && die "查询失败（表缺失或库损坏）：$out" 5
+      printf '%s\n' "$out"
+      local cnt; cnt="$(sqlite3 -readonly "$DB" 'SELECT count(*) FROM history_v2' 2>/dev/null)" || die "读取总数失败" 5
+      echo "  ——共 ${cnt} 条";;
     export)
+      [ -f "$DB" ] || die "typeless.db 不存在" 5
       local out="${2:-$STATE_DIR/history-export-$(date +%Y%m%d-%H%M%S).csv}"
       mkdir -p "$(dirname "$out")"
-      sqlite3 -readonly -header -csv "$DB" "SELECT id, created_at, updated_at, mode, status, duration, app_version, refined_text, audio_local_path FROM history_v2 ORDER BY created_at DESC;" > "$out" || die "导出失败" 5
-      chmod 600 "$out"   # 含听写明文，默认仅用户可读
-      echo "已导出: $out（$(wc -l < "$out") 行，chmod 600）";;
+      # 先用 600 权限创建（umask 无关），再写入；避免「先按 umask 建 644、写满后才 chmod」的明文暴露窗口。
+      # 同时写到临时文件再原子 mv，避免失败时截断既有目标文件。
+      local tmp="${out}.tmp.$$"
+      ( umask 077; : > "$tmp" ) || die "无法创建临时导出文件：$tmp" 5
+      if ! sqlite3 -readonly -header -csv "$DB" "SELECT id, created_at, updated_at, mode, status, duration, app_version, refined_text, audio_local_path FROM history_v2 ORDER BY created_at DESC;" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"; die "导出失败（表缺失或库损坏；既有目标文件未被改动）" 5
+      fi
+      chmod 600 "$tmp" && mv "$tmp" "$out" || { rm -f "$tmp"; die "替换导出文件失败" 5; }
+      echo "已导出: $out（$(wc -l < "$out") 行，权限 600，仅本人可读）";;
     *) die "用法: typelessctl history {list [N]|export [文件.csv]}";;
   esac
 }
