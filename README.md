@@ -1,5 +1,7 @@
 # typelessctl
 
+[![ci](https://github.com/Test2049micro/typelessctl/actions/workflows/ci.yml/badge.svg)](https://github.com/Test2049micro/typelessctl/actions/workflows/ci.yml)
+
 **Typeless for macOS 的命令行控制器 + 静默守卫（非官方工具）**
 
 `typelessctl` 让听写应用 [Typeless](https://www.typeless.com) 以「纯后台听写」方式运行：
@@ -38,6 +40,7 @@ bin/typelessctl guard install   # 注册 launchd 守卫（每 2 秒巡查一次�
 ```
 typelessctl status                     运行状态：进程/窗口/守卫/Dock 模式（--json 可选）
 typelessctl doctor                     能力与权限体检
+typelessctl bootcheck                  开机后自检：登录自启/静默形态/守卫三件套（重启后跑一次）
 typelessctl app launch|quit|status     启停 App
 typelessctl hub close|status|show      关/看主界面（show 未实现，见能力边界）
 typelessctl guard install|uninstall    安装/卸载静默守卫

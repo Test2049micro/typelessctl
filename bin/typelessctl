@@ -101,6 +101,29 @@ cmd_hub() {
   esac
 }
 
+cmd_bootcheck() {
+  # 开机后专用自检：验证「登录自启 + 静默 + 守卫」三件套是否如期。重启后跑一次即可。
+  # 约定：chk 第二参为 shell 退出码语义，0=真=PASS。
+  local fails=0
+  chk() { if [ "$2" = 0 ]; then echo "  PASS  $1"; else echo "  FAIL  $1"; fails=$((fails+1)); fi; }
+  echo "typelessctl bootcheck"
+  local pid wins dock
+  pid="$(app_pid)"
+  [ -n "$pid" ]; chk "App 进程在跑（登录项自启生效）" $?
+  wins="$(windows)"
+  if printf '%s' "$wins" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+    chk "窗口只剩听写浮动条（开机静默形态）" 1
+  else
+    chk "窗口只剩听写浮动条（开机静默形态）" 0
+  fi
+  dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
+  [ "$dock" = "false" ]; chk "不占 Dock（enableShowAppInDock=false）" $?
+  launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; chk "静默守卫已加载（launchd）" $?
+  osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null | grep -q "Typeless"; chk "登录项 Typeless 存在" $?
+  if [ "$fails" = 0 ]; then echo "bootcheck: 全部通过"; exit 0
+  else echo "bootcheck: $fails 项未过（手动开着主界面时属正常，关掉后重跑）"; exit 1; fi
+}
+
 cmd_guard() {
   case "${1:-status}" in
     install)
@@ -188,6 +211,7 @@ usage() {
 typelessctl — Typeless for macOS 命令行控制器（非官方）
 
   status                     运行状态：进程/窗口/守卫/Dock 模式
+  bootcheck                  开机后自检：登录自启/静默形态/守卫三件套（重启后跑一次）
   doctor                     能力与权限体检
   app launch|quit|status     启停 App
   hub close|status|show      关/看主界面（show 未实现=交给 App 托盘菜单）
@@ -204,7 +228,7 @@ EOF
 
 [ "${1:-}" = "--json" ] && { JSON=1; shift; }
 case "${1:-}" in
-  status|doctor|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
+  status|doctor|bootcheck|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
   pause) cmd_guard disable;;
   resume) cmd_guard enable;;
   version|--version) echo "typelessctl 0.1.0";;

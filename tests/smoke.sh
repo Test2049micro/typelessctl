@@ -26,10 +26,11 @@ t 2 "settings set 缺参数 2"   "$TC" settings set onlyKey
 t 4 "hub show 不支持 4"    "$TC" hub show
 t 5 "history 无库 5"       "$TC" history list
 t 5 "settings 无文件 5"    "$TC" settings list
+t 1 "bootcheck 无环境 1"   "$TC" bootcheck
 
 # help 必须包含核心子命令（防止重命名悄悄破坏接口）
 HELP_OUT="$("$TC" help)"
-for kw in status doctor guard settings history hub; do
+for kw in status doctor bootcheck guard settings history hub; do
   case "$HELP_OUT" in *"$kw"*) pass=$((pass+1));; *) fail=$((fail+1)); echo "FAIL: help 缺少 $kw";; esac
 done
 
