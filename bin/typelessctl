@@ -70,12 +70,14 @@ cmd_doctor() {
   echo "typelessctl doctor"
   local ver; ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null)"
   if [ -d "$APP_PATH" ]; then check "app-installed" available "$APP_PATH (v${ver:-?})"
-  else check "app-installed" missing "$APP_PATH 不存在"; fi
+  else check "app-installed" missing "${APP_PATH} 不存在"; fi
   if [ ! -f "$APPLESCRIPT" ]; then check "cli-assets" missing "close-hub.applescript 不在 $APPLESCRIPT"; fi
-  if osascript -e 'tell application "System Events" to get name of first process' >/dev/null 2>&1; then
-    check "accessibility(AX)" available "System Events 可控窗（终端需辅助功能授权）"
+  # AX 权威判据是 System Events 的 `UI elements enabled`：读进程名无需权限、不能当凭据（review 遗留#15）
+  local ax; ax="$(osascript -e 'tell application "System Events" to return UI elements enabled' 2>/dev/null)"
+  if [ "$ax" = "true" ]; then
+    check "accessibility(AX)" available "UI elements enabled（System Events 有权操控他窗）"
   else
-    check "accessibility(AX)" permission_required "请：系统设置→隐私与安全性→辅助功能，勾选你运行本命令的终端"
+    check "accessibility(AX)" permission_required "请：系统设置→隐私与安全性→辅助功能，勾选你运行本命令的终端（当前 UI elements enabled=${ax}）"
   fi
   if [ -f "$SETTINGS" ]; then check "settings-json" available "$SETTINGS"
   else check "settings-json" missing "App 尚未生成设置文件"; fi
@@ -151,11 +153,11 @@ cmd_bootcheck() {
   fi
   dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
   if [ -n "$dock" ]; then [ "$dock" = "false" ]; chk "不占 Dock（enableShowAppInDock=false）" $?
-  else echo "  FAIL  不占 Dock（无法读取 $SETTINGS）"; fails=$((fails+1)); fi
+  else echo "  FAIL  不占 Dock（无法读取 ${SETTINGS}）"; fails=$((fails+1)); fi
   launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; chk "静默守卫已加载（launchd）" $?
   osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null | grep -q "Typeless"; chk "登录项 Typeless 存在" $?
   if [ "$fails" = 0 ]; then echo "bootcheck: 全部通过"; exit 0
-  else echo "bootcheck: $fails 项未过（手动开着主界面时属正常，关掉后重跑）"; exit 1; fi
+  else echo "bootcheck: ${fails} 项未过（手动开着主界面时属正常，关掉后重跑）"; exit 1; fi
 }
 
 cmd_guard() {
@@ -247,12 +249,12 @@ cmd_settings() {
           cp "$SETTINGS" "$_bak" || die "备份失败，未改动原文件：$SETTINGS" 5
           # 原子替换：写临时文件再 mv，避免 Python 直接 "w" 截断原文件后写入失败导致损坏
           _tmp="$SETTINGS.tmp.$$"
-          python3 -c 'import json,sys;f=sys.argv[1];d=json.load(open(f));d[sys.argv[2]]=json.loads(sys.argv[3]);json.dump(d,open(sys.argv[4],"w"),indent=2,ensure_ascii=False)' "$SETTINGS" "$2" "$3" "$_tmp" || { rm -f "$_tmp"; die "写入失败（原文件未改，备份在 $_bak）" 5; }
-          mv "$_tmp" "$SETTINGS" || { rm -f "$_tmp"; die "替换失败（原文件未改，备份在 $_bak）" 5; }
+          python3 -c 'import json,sys,os,stat;f=sys.argv[1];d=json.load(open(f));d[sys.argv[2]]=json.loads(sys.argv[3]);json.dump(d,open(sys.argv[4],"w"),indent=2,ensure_ascii=False);os.chmod(sys.argv[4],stat.S_IMODE(os.stat(f).st_mode))' "$SETTINGS" "$2" "$3" "$_tmp" || { rm -f "$_tmp"; die "写入失败（原文件未改，备份在 ${_bak}）" 5; }
+          mv "$_tmp" "$SETTINGS" || { rm -f "$_tmp"; die "替换失败（原文件未改，备份在 ${_bak}）" 5; }
           now="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2]))' "$SETTINGS" "$2")"
           want="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1]))' "$3")"
-          if [ "$now" = "$want" ]; then echo "已设置 $2=$now（备份 $_bak）";
-          else echo "写入后读回不符：$now ≠ $want（App 可能正持有旧内存态；建议退出 App 后重试）" >&2; exit 6; fi;;
+          if [ "$now" = "$want" ]; then echo "已设置 ${2}=${now}（备份 ${_bak}）";
+          else echo "写入后读回不符：${now} ≠ ${want}（App 可能正持有旧内存态；建议退出 App 后重试）" >&2; exit 6; fi;;
     *) die "用法: typelessctl settings {list|get|set}";;
   esac
 }
@@ -281,7 +283,7 @@ cmd_history() {
         rm -f "$tmp"; die "导出失败（表缺失或库损坏；既有目标文件未被改动）" 5
       fi
       if chmod 600 "$tmp" && mv "$tmp" "$out"; then :; else rm -f "$tmp"; die "替换导出文件失败" 5; fi
-      echo "已导出: $out（$(wc -l < "$out") 行，权限 600，仅本人可读）";;
+      echo "已导出: ${out}（$(wc -l < "$out") 行，权限 600，仅本人可读）";;
     *) die "用法: typelessctl history {list [N]|export [文件.csv]}";;
   esac
 }
@@ -311,7 +313,7 @@ case "${1:-}" in
   status|doctor|bootcheck|app|hub|guard|settings|history) c="$1"; shift; cmd_"$c" "$@";;
   pause) cmd_guard disable;;
   resume) cmd_guard enable;;
-  version|--version) echo "typelessctl 0.1.2";;
+  version|--version) echo "typelessctl 0.1.3";;
   ""|help|--help|-h) usage;;
   *) usage; exit 2;;
 esac

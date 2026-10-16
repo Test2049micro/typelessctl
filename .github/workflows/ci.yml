@@ -6,10 +6,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-      - run: bash -n bin/typelessctl && bash -n tests/smoke.sh
+      - run: bash -n bin/typelessctl && bash -n tests/smoke.sh && bash -n tests/behavior.sh && bash -n install.sh
       - run: shellcheck bin/typelessctl
   smoke:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - run: bash tests/smoke.sh
+      - run: bash tests/behavior.sh

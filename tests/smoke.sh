@@ -66,5 +66,19 @@ for kw in status doctor bootcheck guard settings history hub; do
   case "$HELP_OUT" in *"$kw"*) pass=$((pass+1));; *) fail=$((fail+1)); echo "FAIL: help 缺少 $kw";; esac
 done
 
+# --- 静态扫描：bash 3.2 里 $VAR 紧跟全角字符会被并入变量名（$now（ → unbound）---
+# 作者连踩两次，钉成回归。$VAR 后紧跟非 ASCII（其后是中文括号/逗号）即违规，须写 ${VAR}。
+if /usr/bin/python3 - "$TC" <<'PY'
+import re,sys
+bad=[]
+for ln,line in enumerate(open(sys.argv[1],encoding='utf-8'),1):
+    for m in re.finditer(r'(?<!\$)\$([a-zA-Z_][a-zA-Z0-9_]*)', line):
+        nxt=line[m.end():m.end()+1]
+        if nxt and ord(nxt)>127:
+            bad.append(f"line {ln}: ${m.group(1)}{nxt}")
+if bad: print("\n".join(bad)); sys.exit(1)
+PY
+then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 存在 \$VAR 紧跟全角字符（bash3.2 会并名，改 \${VAR}）"; fi
+
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" = 0 ]
