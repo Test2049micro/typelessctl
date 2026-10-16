@@ -179,7 +179,7 @@ EOF
       launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
       if rm -f "$PLIST"; then echo "guard 已卸载"; else die "plist 删除失败：$PLIST" 5; fi;;
     enable)  rm -f "$STATE_DIR/PAUSED" 2>/dev/null; if [ -f "$STATE_DIR/PAUSED" ]; then die "无法删除 PAUSED，守卫仍暂停" 5; else echo "guard 已启用（resume）"; fi;;
-    disable) mkdir -p "$STATE_DIR" && touch "$STATE_DIR/PAUSED" || die "无法创建 PAUSED，守卫未暂停" 5; echo "guard 已暂停（App 原生窗口行为恢复）";;
+    disable) if mkdir -p "$STATE_DIR" && touch "$STATE_DIR/PAUSED"; then echo "guard 已暂停（App 原生窗口行为恢复）"; else die "无法创建 PAUSED，守卫未暂停" 5; fi;;
     status)
       launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '/state =|pid =|last exit/{print "  "$0}' | head -3
       echo "  paused: $([ -f "$STATE_DIR/PAUSED" ] && echo yes || echo no)   grace: ${GRACE_SECONDS}s   log: $LOG_FILE";;
@@ -261,7 +261,7 @@ cmd_history() {
       if ! sqlite3 -readonly -header -csv "$DB" "SELECT id, created_at, updated_at, mode, status, duration, app_version, refined_text, audio_local_path FROM history_v2 ORDER BY created_at DESC;" > "$tmp" 2>/dev/null; then
         rm -f "$tmp"; die "导出失败（表缺失或库损坏；既有目标文件未被改动）" 5
       fi
-      chmod 600 "$tmp" && mv "$tmp" "$out" || { rm -f "$tmp"; die "替换导出文件失败" 5; }
+      if chmod 600 "$tmp" && mv "$tmp" "$out"; then :; else rm -f "$tmp"; die "替换导出文件失败" 5; fi
       echo "已导出: $out（$(wc -l < "$out") 行，权限 600，仅本人可读）";;
     *) die "用法: typelessctl history {list [N]|export [文件.csv]}";;
   esac
