@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - run: bash -n bin/typelessctl && bash -n tests/smoke.sh && bash -n tests/behavior.sh && bash -n install.sh
-      - run: shellcheck bin/typelessctl
+      - run: shellcheck -S error bin/typelessctl tests/smoke.sh tests/behavior.sh install.sh
   smoke:
     runs-on: macos-14
     steps:

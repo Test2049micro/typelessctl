@@ -5,7 +5,7 @@ set -u
 TC="$(cd "$(dirname "$0")/.." && pwd)/bin/typelessctl"
 export TYPELESSCTL_DB="/nonexistent/typeless.db"
 export TYPELESSCTL_SETTINGS="/nonexistent/app-settings.json"
-export TYPELESSCTL_STATE="$(mktemp -d)"
+STATE_TMP="$(mktemp -d)"; export TYPELESSCTL_STATE="$STATE_TMP"
 
 pass=0; fail=0
 t() { # t <期望退出码> <描述> <命令...>
