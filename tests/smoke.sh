@@ -44,7 +44,16 @@ else pass=$((pass+1)); fi
 # 3. --json status 必须是合法 JSON（曾手工拼接，窗口名含反斜杠/引号即破）
 if "$TC" --json status 2>/dev/null | python3 -c 'import json,sys;json.load(sys.stdin)' 2>/dev/null; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: --json status 输出非合法 JSON"; fi
-rm -rf "$TD" "$TD2" 2>/dev/null
+# 4. 无 born 的残留锁必须能按目录 mtime 过期清除（否则取得锁后被杀 → 锁永久残留）
+TD3="$(mktemp -d)"; mkdir -p "$TD3/tick.lock"; touch -t 202601010000 "$TD3/tick.lock"
+TYPELESSCTL_STATE="$TD3" "$TC" guard tick >/dev/null 2>&1
+if [ -d "$TD3/tick.lock" ]; then fail=$((fail+1)); echo "FAIL: 无 born 的陈旧锁未被 mtime 清除"
+else pass=$((pass+1)); fi
+# 5. 陈旧锁的清理不得误伤新锁（mtime 新鲜时必须保留）
+TD4="$(mktemp -d)"; mkdir -p "$TD4/tick.lock"
+TYPELESSCTL_STATE="$TD4" "$TC" guard tick >/dev/null 2>&1
+if [ -d "$TD4/tick.lock" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 新鲜锁被误清（会导致并发关窗）"; fi
+rm -rf "$TD" "$TD2" "$TD3" "$TD4" 2>/dev/null
 
 # help 必须包含核心子命令（防止重命名悄悄破坏接口）
 HELP_OUT="$("$TC" help)"

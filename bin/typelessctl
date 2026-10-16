@@ -29,6 +29,15 @@ app_secs() { # 进程运行秒数；etime 形如 [[dd-]hh:]mm:ss
     n=split(s,c,":");if(n==3)print d*86400+c[1]*3600+c[2]*60+c[3];else print d*86400+c[1]*60+c[2]}'
 }
 windows() { osascript -e "tell application \"System Events\" to tell process \"$APP_NAME\" to get name of every window" 2>/dev/null; }
+# 读窗口并区分「读到（可能为空）」与「失败」：失败时返回 1，调用方不得当成"无窗口"。
+# osascript 在进程不存在/AX 权限缺失时返回非 0；读到窗口列表（含空列表）返回 0。
+windows_ok() { # 成功时用 REPLY 返回窗口串（可能为空）；失败返回 1
+  local out rc
+  out="$(osascript -e "tell application \"System Events\" to tell process \"$APP_NAME\" to get name of every window" 2>&1)"; rc=$?
+  if [ $rc -ne 0 ]; then REPLY=""; return 1; fi
+  case "$out" in *"not allowed"*|*"not authorized"*|*"assistive"*|*"-1719"*) REPLY=""; return 1;; esac
+  REPLY="$out"; return 0
+}
 
 cmd_status() {
   local pid et secs wins guard dock
@@ -38,12 +47,13 @@ cmd_status() {
   else pid="(not running)"; et=""; wins=""; fi
   guard="$(launchctl list 2>/dev/null | awk -v l="$LABEL" '$3==l{print "loaded (last exit "$2")"}' || true)"
   [ -z "$guard" ] && guard="not installed"
-  dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
+  dock="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("enableShowAppInDock",""))' "$SETTINGS" 2>/dev/null | tr -d '\n')"
+  case "$dock" in True|true) dock=true;; False|false) dock=false;; *) dock="";; esac   # 读不到→空(未知)，不伪装成 false
   if [ "$JSON" = 1 ]; then
     # 用 python3 生成 JSON（正确转义反斜杠/引号/控制字符），避免手工拼接出非法 JSON
     RUNNING=$([ -n "$(app_pid)" ] && echo true || echo false) \
     PID="${pid}" ETIME="${et}" WINS="${wins}" GUARD="${guard}" DOCK="${dock:-}" \
-    python3 -c 'import json,os;print(json.dumps({"running":os.environ["RUNNING"]=="true","pid":os.environ["PID"],"uptime_seconds":os.environ["ETIME"],"windows":os.environ["WINS"],"guard":os.environ["GUARD"],"show_in_dock":os.environ["DOCK"]=="true"}))'
+    python3 -c 'import json,os;d=os.environ["DOCK"];print(json.dumps({"running":os.environ["RUNNING"]=="true","pid":os.environ["PID"],"uptime_seconds":os.environ["ETIME"],"windows":os.environ["WINS"],"guard":os.environ["GUARD"],"show_in_dock":(None if d=="" else d=="true")}))'
   else
     echo "app:        ${pid} $([ -n "$(app_pid)" ] && echo "(running ${et}s)")"
     echo "windows:    ${wins:-（无/未运行）}"
@@ -94,17 +104,18 @@ cmd_hub() {
   case "${1:-status}" in
     close)
       local pid; pid="$(app_pid)"
-      [ -z "$pid" ] && die "App 未运行" 4      # 用 PID 判活，不用「窗口为空」（后者也包含无窗口/权限失败）
-      local before after
-      before="$(windows)"
-      [ -z "$before" ] && die "读不到窗口（可能 AX 权限缺失）" 3
-      if ! printf '%s' "$before" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+      [ -z "$pid" ] && die "App 未运行" 4      # 用 PID 判活，不用「窗口为空」
+      windows_ok || die "读不到窗口（可能 AX 权限缺失）" 3
+      local before="$REPLY" after
+      if ! printf '%s' "$before" | grep -qE '(^|, ?)(Typeless|Onboarding[^,]*)($|,)'; then
         echo "无需关闭：当前没有主界面/引导窗口（剩余: ${before:-无}）"; exit 0
       fi
       osascript "$APPLESCRIPT" >/dev/null 2>&1   # 点击动作；不以它的返回值当结论，下面读回核验
       sleep 1
-      after="$(windows)"
-      if printf '%s' "$after" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+      # 读回核验：读失败时不得当作"已关闭"（否则权限问题会伪装成成功）
+      windows_ok || die "关闭后无法读回窗口（AX 权限或 App 状态异常），结果未核验" 6
+      after="$REPLY"
+      if printf '%s' "$after" | grep -qE '(^|, ?)(Typeless|Onboarding[^,]*)($|,)'; then
         echo "窗仍存在（关闭未生效）：$after" >&2; exit 6
       else
         echo "已关闭（剩余窗口: ${after:-无}）"
@@ -128,15 +139,15 @@ cmd_bootcheck() {
   [ "$ax_ok" = 0 ]; chk "辅助功能(AX)权限可用" $?
   pid="$(app_pid)"
   [ -n "$pid" ]; chk "App 进程在跑（登录项自启生效）" $?
-  if [ "$ax_ok" != 0 ]; then
-    echo "  FAIL  窗口只剩听写浮动条（无法读取窗口：AX 权限缺失）"; fails=$((fails+1))
-  else
-    wins="$(windows)"
-    if printf '%s' "$wins" | grep -qE '(^|, ?)(Typeless|Onboarding)($|,)'; then
+  if windows_ok; then
+    wins="$REPLY"
+    if printf '%s' "$wins" | grep -qE '(^|, ?)(Typeless|Onboarding[^,]*)($|,)'; then
       chk "窗口只剩听写浮动条（开机静默形态）" 1
     else
       chk "窗口只剩听写浮动条（开机静默形态）" 0
     fi
+  else
+    echo "  FAIL  窗口只剩听写浮动条（读取窗口失败：AX 权限或 App 状态异常，结果未核验）"; fails=$((fails+1))
   fi
   dock="$(python3 -c 'import json,sys;v=json.load(open(sys.argv[1])).get("enableShowAppInDock",False);print("true" if v else "false")' "$SETTINGS" 2>/dev/null)"
   if [ -n "$dock" ]; then [ "$dock" = "false" ]; chk "不占 Dock（enableShowAppInDock=false）" $?
@@ -191,12 +202,16 @@ EOF
       mkdir -p "$STATE_DIR"   # 首次安装时 STATE_DIR 可能不存在，否则 mkdir 锁会永久失败
       LOCK="$STATE_DIR/tick.lock"
       if ! mkdir "$LOCK" 2>/dev/null; then
-        NOW=$(date +%s); BORN=$(cat "$LOCK/born" 2>/dev/null || echo "$NOW")
-        case "$BORN" in ''|*[!0-9]*) BORN="$NOW";; esac   # 非十进制整数不做算术（防内容被注入算术求值）
-        if [ $((NOW - BORN)) -gt 60 ]; then rm -rf "$LOCK"; exit 0; fi
+        NOW=$(date +%s)
+        # 锁龄优先读 born 文件；若 born 缺失（持有者取得锁后、写入前被杀）用锁目录自身 mtime 兜底，
+        # 否则会把「无 born 的锁」每轮都当作刚创建 → 永久残留（2026-10-17 二审发现）。
+        BORN="$(cat "$LOCK/born" 2>/dev/null)"
+        case "$BORN" in ''|*[!0-9]*) BORN="$(stat -f %m "$LOCK" 2>/dev/null || echo "$NOW")";; esac
+        case "$BORN" in ''|*[!0-9]*) BORN="$NOW";; esac
+        if [ $((NOW - BORN)) -gt 60 ]; then rm -rf "$LOCK"; fi   # 清残留后让下一轮重取（本轮不再动作）
         exit 0
       fi
-      date +%s > "$LOCK/born"
+      date +%s > "$LOCK/born" 2>/dev/null || true
       trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
       pid="$(app_pid)"; [ -z "$pid" ] && exit 0
       secs="$(app_secs "$pid")"
@@ -282,7 +297,7 @@ typelessctl — Typeless for macOS 命令行控制器（非官方）
   history list [N]           最近 N 条听写历史（SQLite 直读）
   history export [csv]       全量导出 CSV（默认 ~/.typelessctl/，chmod 600）
   pause / resume             = guard disable / enable 的别名
-全局：--json（status/history list）  环境变量：TYPELESSCTL_GRACE 宽限秒(默认15)
+全局：--json（仅 status 支持；须置于子命令前，如 `typelessctl --json status`）  环境变量：TYPELESSCTL_GRACE 宽限秒(默认15)
 退出码：0 成功 2 用法 3 权限 4 不支持 5 数据 6 结果未核验
 EOF
 }
