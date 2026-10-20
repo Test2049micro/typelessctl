@@ -1,16 +1,24 @@
 name: ci
 on: [push, pull_request]
+# Grant write permissions only to jobs that publish artifacts.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - run: bash -n bin/typelessctl && bash -n tests/smoke.sh && bash -n tests/behavior.sh && bash -n install.sh
       - run: shellcheck -S error bin/typelessctl tests/smoke.sh tests/behavior.sh install.sh
   smoke:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - run: bash tests/smoke.sh
       - run: bash tests/behavior.sh
